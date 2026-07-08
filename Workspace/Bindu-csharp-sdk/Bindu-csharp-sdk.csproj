@@ -17,4 +17,9 @@
     </PackageReference>
   </ItemGroup>
 
+	<ItemGroup>
+		<Protobuf Include="proto/agent_handler.proto" GrpcServices="Both" />
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
 </Project>
