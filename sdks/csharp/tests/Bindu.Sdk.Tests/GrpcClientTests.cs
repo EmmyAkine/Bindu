@@ -46,7 +46,7 @@ public class GrpcClientTests {
             Assert.Equal("agent", root.GetProperty("kind").GetString());
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 
@@ -62,7 +62,7 @@ public class GrpcClientTests {
             Assert.Contains("config validation failed", ex.Message);
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 
@@ -87,7 +87,7 @@ public class GrpcClientTests {
             Assert.Equal("agent-0001", core.LastUnregisterRequest?.AgentId);
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 }

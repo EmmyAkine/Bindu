@@ -27,8 +27,10 @@ public sealed class FakeBinduCore : IAsyncDisposable {
     /// <summary>Captures the most recent heartbeat request the SDK sent.</summary>
     public HeartbeatRequest? LastHeartbeatRequest { get; set; }
 
+    private int _heartbeatCount;
+
     /// <summary>Total number of heartbeat requests received.</summary>
-    public int HeartbeatCount { get; private set; }
+    public int HeartbeatCount => Volatile.Read(ref _heartbeatCount);
 
     /// <summary>
     /// When <c>true</c>, the fake core rejects heartbeats with an <c>RpcException</c>
@@ -63,14 +65,15 @@ public sealed class FakeBinduCore : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Starts the fake core on a dynamically assigned free port.
+    /// Starts the fake core on a dynamically assigned free port, or on the given
+    /// <paramref name="port"/> when it is non-zero.
     /// </summary>
-    public static async Task<FakeBinduCore> StartAsync() {
+    public static async Task<FakeBinduCore> StartAsync(int port = 0) {
         var core = new FakeBinduCorePlaceholder();
         var builder = WebApplication.CreateBuilder();
 
         builder.WebHost.ConfigureKestrel(options => {
-            options.Listen(IPAddress.Any, 0, listenOptions => {
+            options.Listen(IPAddress.Loopback, port, listenOptions => {
                 listenOptions.Protocols = HttpProtocols.Http2;
             });
         });
@@ -85,9 +88,9 @@ public sealed class FakeBinduCore : IAsyncDisposable {
 
         var addressFeature = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
         var address = addressFeature?.Addresses.FirstOrDefault() ?? throw new InvalidOperationException("No server address");
-        var port = new Uri(address).Port;
+        var assignedPort = new Uri(address).Port;
 
-        var instance = new FakeBinduCore(app, port);
+        var instance = new FakeBinduCore(app, assignedPort);
         core.Instance = instance;
         return instance;
     }
@@ -124,7 +127,7 @@ public sealed class FakeBinduCore : IAsyncDisposable {
         public override Task<HeartbeatResponse> Heartbeat(HeartbeatRequest request, ServerCallContext context) {
             var core = _core.Instance!;
             core.LastHeartbeatRequest = request;
-            core.HeartbeatCount++;
+            Interlocked.Increment(ref core._heartbeatCount);
             if (core.RejectHeartbeats) {
                 throw new RpcException(new Status(StatusCode.Unavailable, "core not accepting heartbeats"));
             }
@@ -147,5 +150,6 @@ public sealed class FakeBinduCore : IAsyncDisposable {
 /// Used to run <see cref="BinduAgent.Bindufy"/> against <see cref="FakeBinduCore"/>.
 /// </summary>
 internal sealed class NoOpCoreLauncher : CoreLauncher {
+    public NoOpCoreLauncher(int grpcPort = 3774) : base(grpcPort) { }
     public override Task LaunchBinduServer() => Task.CompletedTask;
 }

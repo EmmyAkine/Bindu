@@ -37,7 +37,7 @@ public class GrpcServerTests {
             Assert.True(server.GetPort > 0, "Server should have been assigned an ephemeral port");
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 
@@ -55,7 +55,7 @@ public class GrpcServerTests {
                 Assert.True(server.GetPort > 0);
             }
             finally {
-                server.StopServerAsync();
+                await server.StopServerAsync();
             }
         }
         finally {
@@ -73,7 +73,7 @@ public class GrpcServerTests {
             Assert.Equal(port, server.GetPort);
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 
@@ -95,7 +95,7 @@ public class GrpcServerTests {
             Assert.True(response.IsFinal);
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 
@@ -124,12 +124,12 @@ public class GrpcServerTests {
             Assert.True(response.IsFinal);
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 
     [Fact]
-    public async Task HandleMessages_Exception_Becomes_RpcException_With_Trailers() {
+    public async Task HandleMessages_Exception_Becomes_Generic_RpcException_Without_Leaking_Details() {
         var server = new GrpcServer(0);
         await server.StartServerAsync(
             _ => throw new InvalidOperationException("handler exploded"),
@@ -142,12 +142,54 @@ public class GrpcServerTests {
                     Messages = { new ChatMessage { Role = "user", Content = "boom" } }
                 }).ResponseAsync);
 
+            // Security: the internal exception type/message/stack must NOT be exposed to callers.
             Assert.Equal(StatusCode.Internal, ex.StatusCode);
-            Assert.Equal("handler exploded", ex.Status.Detail);
-            Assert.Equal("InvalidOperationException", ex.Trailers.GetValue("exception-type"));
+            Assert.Equal("", ex.Status.Detail);
+            Assert.DoesNotContain("handler exploded", ex.Status.Detail);
+            Assert.Null(ex.Trailers.GetValue("exception-type"));
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
+        }
+    }
+
+    [Fact]
+    public async Task HandleMessages_Null_Result_Is_Rejected_As_Internal_RpcException() {
+        var server = new GrpcServer(0);
+        await server.StartServerAsync(_ => Task.FromResult<object>(null!), TestConfig());
+        using var channel = GrpcChannel.ForAddress($"http://localhost:{server.GetPort}");
+        var client = new AgentHandlerClient(channel);
+        try {
+            var ex = await Assert.ThrowsAsync<RpcException>(() =>
+                client.HandleMessagesAsync(new HandleRequest {
+                    Messages = { new ChatMessage { Role = "user", Content = "boom" } }
+                }).ResponseAsync);
+
+            Assert.Equal(StatusCode.Internal, ex.StatusCode);
+            Assert.Equal("", ex.Status.Detail);
+        }
+        finally {
+            await server.StopServerAsync();
+        }
+    }
+
+    [Fact]
+    public async Task HandleMessages_Unsupported_Result_Type_Is_Rejected_As_Internal_RpcException() {
+        var server = new GrpcServer(0);
+        await server.StartServerAsync(_ => Task.FromResult<object>(12345), TestConfig());
+        using var channel = GrpcChannel.ForAddress($"http://localhost:{server.GetPort}");
+        var client = new AgentHandlerClient(channel);
+        try {
+            var ex = await Assert.ThrowsAsync<RpcException>(() =>
+                client.HandleMessagesAsync(new HandleRequest {
+                    Messages = { new ChatMessage { Role = "user", Content = "boom" } }
+                }).ResponseAsync);
+
+            Assert.Equal(StatusCode.Internal, ex.StatusCode);
+            Assert.Equal("", ex.Status.Detail);
+        }
+        finally {
+            await server.StopServerAsync();
         }
     }
 
@@ -166,14 +208,14 @@ public class GrpcServerTests {
             Assert.False(caps.SupportsStreaming);
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 
     [Fact]
     public async Task GetCapabilities_Defaults_Version_To_0_1_0() {
         var config = TestConfig();
-        config.Version = null;
+        config.Version = null!; // Deliberately force the null-default path (CS8625).
 
         var server = new GrpcServer(0);
         await server.StartServerAsync(_ => Task.FromResult<object>("ok"), config);
@@ -184,7 +226,7 @@ public class GrpcServerTests {
             Assert.Equal("0.1.0", caps.Version);
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 
@@ -201,7 +243,7 @@ public class GrpcServerTests {
             Assert.Equal("test-agent is healthy", health.Message);
         }
         finally {
-            server.StopServerAsync();
+            await server.StopServerAsync();
         }
     }
 }

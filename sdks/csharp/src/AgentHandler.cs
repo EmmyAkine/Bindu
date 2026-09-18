@@ -48,21 +48,20 @@ namespace Bindu.Sdk {
                     response.Content = binduResp.Content;
                     response.State = binduResp.State;
                     response.Prompt = binduResp.Prompt;
-                    foreach (var kv in binduResp.Metadata)
+                    foreach (var kv in binduResp.Metadata) {
                         response.Metadata[kv.Key] = kv.Value;
+                    }
+                }
+                else {
+                    throw new InvalidOperationException($"Handler returned an unsupported type: {resp?.GetType().Name ?? "null"}. Expected string or BinduResponse.");
                 }
 
                 return response;
             }
             catch (Exception ex) {
-                // Stack traces contain CR/LF which are illegal in HTTP/2 header (trailer)
-                // values — Kestrel rejects the response with HTTP 500. Flatten them first.
-                var stackTrace = (ex.StackTrace ?? "no stack trace").Replace("\r", " ").Replace("\n", " ");
-                var trailers = new Metadata {
-                    { "exception-type", ex.GetType().Name },
-                    { "stack-trace", stackTrace }
-                };
-                throw new RpcException(new Status(StatusCode.Internal, ex.Message), trailers);
+                Console.Error.WriteLine($"[bindu-sdk:err] Unexpected error: {ex.Message}");
+                Console.Error.WriteLine($"[bindu-sdk:err] Unexpected error: {ex.StackTrace}");
+                throw new RpcException(new Status(StatusCode.Internal, ""));
             }
         }
 

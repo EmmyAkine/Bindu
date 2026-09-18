@@ -7,10 +7,12 @@ namespace Bindu.Sdk {
     /// Sends periodic heartbeats to the Bindu core so it knows the registered agent
     /// process is still alive.
     /// </summary>
-    internal class HeartbeatService {
+    internal class HeartbeatService : IDisposable {
 
         private Timer? _timer;
         private BinduServiceClient? _binduClient;
+
+        private int _isHeartbeating = 0;
 
         /// <summary>
         /// Starts sending heartbeats to the core every 30 seconds.
@@ -36,8 +38,11 @@ namespace Bindu.Sdk {
         private async void HeartBeat(object? state) {
             try {
                 if (state == null) {
-                    throw new RpcException(new Status(StatusCode.Internal, ""));
+                    return;
                 }
+
+                if (Interlocked.Exchange(ref _isHeartbeating, 1) == 1)
+                    return;
                 RegistrationResult info = (RegistrationResult)state;
 
                 var heartbeatRequest = new HeartbeatRequest {
@@ -56,22 +61,24 @@ namespace Bindu.Sdk {
                 Console.WriteLine($"[bindu-sdk:err] Heartbeat unexpected error: {ex.Message}");
                 Console.WriteLine($"[bindu-sdk:err] Heartbeat unexpected error: {ex.StackTrace}");
             }
+            finally {
+                Interlocked.Exchange(ref _isHeartbeating, 0);
+            }
         }
 
         /// <summary>Sends a heartbeat request over gRPC and returns the core's response.</summary>
         private async Task<HeartbeatResponse> SendHeartBeat(HeartbeatRequest heartbeatRequest) {
 
-            var response = await _binduClient!.HeartbeatAsync(heartbeatRequest, new CallOptions());
+            var response = await _binduClient!.HeartbeatAsync(heartbeatRequest, new CallOptions(deadline: DateTime.UtcNow.AddSeconds(5)));
             return response;
         }
 
         /// <summary>Stops the heartbeat timer.</summary>
-        public void CleanUp() {
+        public void CleanUp() => Dispose();
+
+        public void Dispose() {
             _timer?.Dispose();
             _timer = null;
         }
-
     }
-
-
 }

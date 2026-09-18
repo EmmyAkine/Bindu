@@ -84,6 +84,7 @@ var config = new AgentConfig {
     Description = "Repeats the last message back",
     DeploymentUrl = "http://localhost:3773",
     ExposeDeployment = false,
+    CoreGrpcPort = 3774,           // Bindu core's gRPC server port
     Version = "0.1.0"
 };
 
@@ -118,7 +119,7 @@ That's it. Your agent is now a microservice at `http://localhost:3773` with DID,
 When you call `Bindufy(config, handler)`, the SDK:
 
 1. **Locates the Bindu core** — tries `bindu` on `PATH`, then `uv run bindu`, then `python3 -m bindu.cli`
-2. **Launches the core** as a child process with gRPC enabled on `:3774`
+2. **Launches the core** as a child process with gRPC enabled on the port from `config.CoreGrpcPort` (default `:3774`)
 3. **Waits for the core's gRPC port** to accept connections (30s timeout)
 4. **Starts a gRPC callback server** for your handler (on `GrpcCallbackPort`, or a free port)
 5. **Registers your agent** with the core via the `RegisterAgent` gRPC call
@@ -179,6 +180,7 @@ var config = new AgentConfig {
     DeploymentUrl = "http://localhost:3773",
     ExposeDeployment = false,
     GrpcCallbackPort = 0,              // 0 = auto-pick a free port
+    CoreGrpcPort = 3774,               // port for the Bindu core's gRPC server
     Skills = [],
     Version = "0.1.0"
 };
@@ -192,6 +194,7 @@ var config = new AgentConfig {
 | `DeploymentUrl` | `string` | A2A server URL. Default: `http://localhost:3773` |
 | `ExposeDeployment` | `bool` | Expose the deployment publicly. Default: `false` |
 | `GrpcCallbackPort` | `int` | Port for the SDK's gRPC callback server. `0` (default) picks a free port automatically — and if a chosen port is busy, the SDK falls back to a free one |
+| `CoreGrpcPort` | `int` | Port for the Bindu core's gRPC registration server. Default: `3774`. The SDK launches the core here and connects to the same port — give each agent a distinct value on one machine so they don't contend |
 | `Skills` | `string[]` | Reserved for future use — not yet transmitted during registration |
 | `Version` | `string?` | Agent version. Default: `0.1.0` |
 

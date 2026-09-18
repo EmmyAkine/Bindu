@@ -7,6 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+	  <WarningsAsErrors>CS1591</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,24 +24,21 @@
 
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" Version="3.35.1" />
-    <PackageReference Include="Grpc.AspNetCore" Version="2.80.0" />
-    <PackageReference Include="Grpc.Net.Client" Version="2.80.0" />
-    <PackageReference Include="Grpc.Tools" Version="2.81.1">
+    <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.83.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
 
 	<ItemGroup>
-		<Protobuf Include="proto/agent_handler.proto" GrpcServices="Both" />
+		<Protobuf Include="../../proto/agent_handler.proto" GrpcServices="Both" />
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
 	</ItemGroup>
 
 	<Target Name="CopyXmlDocToRefOutput" AfterTargets="Compile" Condition="'$(GenerateDocumentationFile)' == 'true'">
-		<Copy SourceFiles="$(IntermediateOutputPath)$(AssemblyName).xml"
-				DestinationFolder="$(IntermediateOutputPath)ref"
-				SkipUnchangedFiles="true"
-				Condition="Exists('$(IntermediateOutputPath)$(AssemblyName).xml')" />
+		<Copy SourceFiles="$(IntermediateOutputPath)$(AssemblyName).xml" DestinationFolder="$(IntermediateOutputPath)ref" SkipUnchangedFiles="true" Condition="Exists('$(IntermediateOutputPath)$(AssemblyName).xml')" />
 	</Target>
 
 </Project>

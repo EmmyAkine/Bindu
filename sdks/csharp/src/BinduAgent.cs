@@ -38,9 +38,11 @@ namespace Bindu.Sdk {
 
         /// <summary>
         /// Creates a Bindu SDK instance with an injected launcher and core address.
-        /// Used by the test suite to run against an in-process fake core.
+        /// Used by the test suite to run against an in-process fake core. When
+        /// <paramref name="coreAddress"/> is <c>null</c>, the SDK derives the core
+        /// address from <see cref="AgentConfig.CoreGrpcPort"/> at <see cref="Bindufy"/> time.
         /// </summary>
-        internal BinduAgent(CoreLauncher launcher, string coreAddress) {
+        internal BinduAgent(CoreLauncher launcher, string? coreAddress = null) {
             _injectedLauncher = launcher;
             _coreAddress = coreAddress;
         }
@@ -72,63 +74,70 @@ namespace Bindu.Sdk {
 
             //TODO: Verify the config files if needed before starting up all the server
 
-            var launcher = _injectedLauncher ?? new CoreLauncher();
-            var grpcServer = new GrpcServer(config.GrpcCallbackPort);
-            var grpcClient = new GrpcClient(_coreAddress ?? "http://localhost:3774/");
+            try {
+                //Assign all class fields early for shutdown
+                _launcher = _injectedLauncher ?? new CoreLauncher(config.CoreGrpcPort);
+                _grpcServer = new GrpcServer(config.GrpcCallbackPort);
+                _grpcClient = new GrpcClient(_coreAddress ?? $"http://localhost:{config.CoreGrpcPort}/");
 
-            await launcher.LaunchBinduServer();
-            await grpcServer.StartServerAsync(handler, config);
-            await CoreLauncher.WaitForPortAsync(grpcServer.GetPort);
-            var binduClient = grpcClient.InitializeBinduClient(grpcServer);
-            var response = await grpcClient.RegisterAgent(config);
-            var regResult = new RegistrationResult(response?.AgentId ?? "", response?.Did ?? "", response?.AgentUrl ?? "");
-            _registrationResult = regResult;
+                await _launcher.LaunchBinduServer();
+                await _grpcServer.StartServerAsync(handler, config);
+                await CoreLauncher.WaitForPortAsync(_grpcServer.GetPort);
 
-            var heartBeat = new HeartbeatService(regResult, binduClient);
+                var binduClient = _grpcClient.InitializeBinduClient(_grpcServer);
+                var response = await _grpcClient.RegisterAgent(config);
 
-            AppDomain.CurrentDomain.ProcessExit += OnApplicationShutdown;
-            Console.CancelKeyPress += Console_CancelKeyPress;
+                _registrationResult = new RegistrationResult(response?.AgentId ?? "", response?.Did ?? "", response?.AgentUrl ?? "");
+                
 
-            //Assign all class Fields for shutdown handling
-            _launcher = launcher;
-            _heartbeatService = heartBeat;
-            _grpcServer = grpcServer;
-            _grpcClient = grpcClient;
+                _heartbeatService = new HeartbeatService(_registrationResult, binduClient);
 
-            return regResult;
+                AppDomain.CurrentDomain.ProcessExit += OnApplicationShutdown;
+                Console.CancelKeyPress += Console_CancelKeyPress;
+
+                return _registrationResult;
+            }
+            catch {
+                await DisposeAsync();
+                throw;
+            }
         }
 
         private void Console_CancelKeyPress(object? sender, ConsoleCancelEventArgs e) {
             e.Cancel = true;
             Console.WriteLine("\n[bindu-sdk] Shutting down...");
-            CleanUp();
+            Dispose();
             Environment.Exit(0);
         }
 
         private void OnApplicationShutdown(object? sender, EventArgs e) {
             Console.WriteLine("\n[bindu-sdk] Shutting down...");
-            CleanUp();
+            Dispose();
         }
 
-        private void CleanUp() {
-            _grpcClient?.UnRegisterAgent(_registrationResult!);
-            _launcher?.CleanUp();
-            _grpcServer?.StopServerAsync();
-            _heartbeatService?.CleanUp();
-        }
-
-        /// <summary>
-        /// Unregisters the agent from the core, stops the callback server and heartbeat
-        /// service, and terminates the Bindu core process.
-        /// </summary>
-        public void Dispose() {
-            CleanUp();
-        }
-
+        
         /// <inheritdoc cref="Dispose"/>
-        public ValueTask DisposeAsync() {
-            CleanUp();
-            return new ValueTask();
+        public void Dispose() {
+            DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+
+
+        /// <inheritdoc cref="DisposeAsync"/>
+        public async ValueTask DisposeAsync() {
+            if (_grpcClient != null && _registrationResult != null) {
+                _grpcClient.UnRegisterAgent(_registrationResult);
+            }
+            _grpcClient?.Dispose();
+
+            if (_grpcServer != null) {
+                await _grpcServer.StopServerAsync();
+            }
+
+            _heartbeatService?.Dispose();
+            _launcher?.CleanUp();
+
+            AppDomain.CurrentDomain.ProcessExit -= OnApplicationShutdown;
+            Console.CancelKeyPress -= Console_CancelKeyPress;
         }
 
     }
@@ -160,6 +169,13 @@ namespace Bindu.Sdk {
         public int GrpcCallbackPort { get; set; } = 0;
         /// <summary>Base URL of the Bindu deployment server.</summary>
         public string DeploymentUrl { get; set; } = "http://localhost:3773";
+        /// <summary>
+        /// Port the Bindu core's gRPC server listens on. Defaults to <c>3774</c>.
+        /// The launcher starts the core on this port and the SDK connects to the same
+        /// port to register the agent, so two agents on one machine must use distinct
+        /// values here.
+        /// </summary>
+        public int CoreGrpcPort { get; set; } = 3774;
         /// <summary>Whether the agent's deployment should be exposed publicly.</summary>
         public bool ExposeDeployment { get; set; } = false;
         /// <summary>
@@ -169,7 +185,7 @@ namespace Bindu.Sdk {
         public string[] Skills { get; set; } = [];
 
         /// <summary>Optional version string for this agent. Defaults to "0.1.0".</summary>
-        public string? Version { get; set; }
+        public string Version { get; set; } = "0.1.0";
 
     }
 

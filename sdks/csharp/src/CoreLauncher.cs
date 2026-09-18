@@ -9,8 +9,21 @@ namespace Bindu.Sdk {
     /// </summary>
     internal class CoreLauncher {
 
-        private int _grpcPort = 3774;
+        private int _grpcPort;
         private Process? _process;
+
+        private int _isCleanedUp = 0;
+
+        /// <summary>
+        /// Creates a launcher that starts the Bindu core with its gRPC server on the given port.
+        /// </summary>
+        /// <param name="grpcPort">
+        /// Port the core's gRPC server listens on. Defaults to <c>3774</c>, which is the
+        /// port the SDK's <see cref="GrpcClient"/> expects by default.
+        /// </param>
+        public CoreLauncher(int grpcPort = 3774) {
+            _grpcPort = grpcPort;
+        }
 
         /// <summary>
         /// Starts the Bindu core process and waits until its gRPC port is accepting
@@ -24,69 +37,82 @@ namespace Bindu.Sdk {
         /// Thrown when the core does not open its gRPC port within the wait window.
         /// </exception>
         public virtual async Task LaunchBinduServer() {
-            var binduPath = FindBinduExecutable();
-            var command = "";
-            var argsList = Array.Empty<string>();
+            try {
+                var binduPath = FindBinduExecutable();
+                var command = "";
+                var argsList = Array.Empty<string>();
 
-            if (binduPath != null) {
-                command = binduPath;
-                argsList = [ "serve", "--grpc", "--grpc-port", _grpcPort.ToString() ];
+                if (binduPath != null) {
+                    command = binduPath;
+                    argsList = ["serve", "--grpc", "--grpc-port", _grpcPort.ToString()];
+                }
+                else if (IsUvInstalled()) {
+                    command = "uv";
+                    argsList = ["run", "bindu", "serve", "--grpc", "--grpc-port", _grpcPort.ToString()];
+                }
+                else if (IsPython3Installed()) {
+                    command = "python3";
+                    argsList = ["-m", "bindu.cli", "serve", "--grpc", "--grpc-port", _grpcPort.ToString()];
+                }
+                else {
+                    throw new InvalidOperationException("Cannot find bindu, uv, or python3. Ensure at least one is installed.");
+                }
+
+                var processInfo = new ProcessStartInfo {
+                    FileName = command,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                for (int i = 0; i < argsList.Length; i++) {
+                    processInfo.ArgumentList.Add(argsList[i]);
+                }
+
+                Console.WriteLine($"[bindu-sdk] Starting Bindu core: {command} {string.Join(" ", argsList)}");
+                var binduProcess = Process.Start(processInfo) ?? throw new InvalidOperationException("Failed to start Bindu core process.");
+                _process = binduProcess;
+
+                binduProcess.Exited += BinduProcess_Exited;
+
+                binduProcess.EnableRaisingEvents = true;
+
+                binduProcess.OutputDataReceived += (sender, e) => {
+                    if (e.Data != null) Console.WriteLine($"[bindu-core] {e.Data}");
+                };
+                binduProcess.ErrorDataReceived += (s, e) => {
+                    if (e.Data != null) Console.WriteLine($"[bindu-core:err] {e.Data}");
+                };
+                binduProcess.BeginOutputReadLine();
+                binduProcess.BeginErrorReadLine();
+
+
+                await WaitForPortAsync(_grpcPort);
+                Console.WriteLine("[bindu-sdk] Core is ready and accepting registrations.");
             }
-            else if (IsUvInstalled()) {
-                command = "uv";
-                argsList = ["run", "bindu", "serve", "--grpc", "--grpc-port", _grpcPort.ToString()];
-            }
-            else if(IsPython3Installed()) {
-                command = "python3";
-                argsList = ["-m", "bindu.cli", "serve", "--grpc", "--grpc-port", _grpcPort.ToString()];
-            }
-            else {
-                throw new InvalidOperationException("Cannot find bindu, uv, or python3. Ensure at least one is installed.");
+            catch {
+                CleanUp();
+                throw;
             }
 
-            var processInfo = new ProcessStartInfo {
-                FileName = command,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            for (int i = 0; i < argsList.Length; i++) {
-                processInfo.ArgumentList.Add(argsList[i]);
-            }
-
-            Console.WriteLine($"[bindu-sdk] Starting Bindu core: {command} {string.Join(" ", argsList)}");
-            var binduProcess = Process.Start(processInfo) ?? throw new InvalidOperationException("Failed to start Bindu core process.");
-            _process = binduProcess;
-
-            binduProcess.Exited += BinduProcess_Exited;
-
-            binduProcess.EnableRaisingEvents = true;
-
-            binduProcess.OutputDataReceived += (sender, e) => {
-                if (e.Data != null) Console.WriteLine($"[bindu-core] {e.Data}");
-            };
-            binduProcess.ErrorDataReceived += (s, e) => {
-                if (e.Data != null) Console.WriteLine($"[bindu-core:err] {e.Data}");
-            };
-            binduProcess.BeginOutputReadLine();
-            binduProcess.BeginErrorReadLine();
-
-
-            await WaitForPortAsync(_grpcPort);
-            Console.WriteLine("[bindu-sdk] Core is ready and accepting registrations.");
         }
 
         private void BinduProcess_Exited(object? sender, EventArgs e) {
-            Console.WriteLine($"[bindu-sdk] Bindu core exited unexpectedly with code {_process!.ExitCode}");
+            int? exitCode = null;
+            try { exitCode = (sender as Process)?.ExitCode; } catch { /* already disposed */ }
+            Console.WriteLine($"[bindu-sdk] Bindu core exited unexpectedly with code {exitCode}");
             CleanUp();
         }
 
         /// <summary>Kills and disposes the Bindu core process if one was started.</summary>
         public void CleanUp() {
-            _process?.Kill(entireProcessTree: true);
-            _process?.Dispose();
-            _process = null;
+            if (Interlocked.Exchange(ref _isCleanedUp, 1) == 1) return;
+
+            if (_process != null && !_process.HasExited) {
+                _process?.Kill(entireProcessTree: true);
+                _process?.Dispose();
+                _process = null;
+            }
         }
 
         /// <summary>
@@ -108,14 +134,17 @@ namespace Bindu.Sdk {
 
                     return;
                 }
-                catch (SocketException) {
-
+                catch (Exception ex) when (ex is SocketException || ex is TaskCanceledException) {
+                    try {
+                        await Task.Delay(500, cts.Token);
+                    }
+                    catch (TaskCanceledException) {
+                        break; 
+                    }
                 }
                 catch (OperationCanceledException) {
                     break;
                 }
-
-                await Task.Delay(500, cts.Token);
             }
             throw new TimeoutException($"[bindu-sdk] Bindu core did not start within {timeoutMs / 1000}s on port {port}");
         }

@@ -1,4 +1,5 @@
 ﻿using Bindu.Grpc;
+using Grpc.Core;
 using Grpc.Net.Client;
 using System.Text.Json;
 using static Bindu.Grpc.BinduService;
@@ -8,8 +9,9 @@ namespace Bindu.Sdk {
     /// gRPC client used to talk to the Bindu core on port 3774 (register agents,
     /// unregister agents, and send heartbeats).
     /// </summary>
-    internal class GrpcClient {
+    internal class GrpcClient : IDisposable {
         private BinduServiceClient? _binduClient;
+        private GrpcChannel? _channel;
         private GrpcServer? _grpcServer;
         private readonly string _coreAddress;
 
@@ -31,9 +33,9 @@ namespace Bindu.Sdk {
         /// to the core during registration.</param>
         /// <returns>The initialized core client.</returns>
         public BinduServiceClient InitializeBinduClient(GrpcServer grpcServer) {
-            var channel = GrpcChannel.ForAddress(_coreAddress);
+            _channel = GrpcChannel.ForAddress(_coreAddress);
 
-            var client = new BinduServiceClient(channel);
+            var client = new BinduServiceClient(_channel);
             _binduClient = client;
             _grpcServer = grpcServer;
             return _binduClient;
@@ -68,7 +70,10 @@ namespace Bindu.Sdk {
                 ConfigJson = json,
                 GrpcCallbackAddress = $"localhost:{_grpcServer!.GetPort}"
             };
-            var response = await _binduClient.RegisterAgentAsync(regRequest);
+
+            var options = new CallOptions(deadline: DateTime.UtcNow.AddSeconds(10));
+
+            var response = await _binduClient.RegisterAgentAsync(regRequest, options);
             if (!response.Success) {
                 throw new InvalidOperationException($"Bindu agent registration failed: {response.Error}");
             }
@@ -85,9 +90,23 @@ namespace Bindu.Sdk {
             var unRegister = new UnregisterAgentRequest {
                 AgentId = regDetails.AgentId
             };
-            var returnValue = _binduClient?.UnregisterAgent(unRegister);
-            _binduClient = null;
-            return returnValue;
+            try {
+                var options = new CallOptions(deadline: DateTime.UtcNow.AddSeconds(10));
+                return _binduClient?.UnregisterAgent(unRegister, options);
+            }
+            catch (RpcException) {
+                return null;
+            }
+            finally {
+                _channel?.Dispose();
+                _channel = null;
+                _binduClient = null;
+            }
+        }
+
+        public void Dispose() {
+            _channel?.Dispose();
+            _channel = null;
         }
 
     }
